@@ -1,13 +1,14 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using VisionHive.Application.Enums;
 
 namespace VisionHive.API.Models
 {
     public class MotoInputModel
     {
 
-        // Placa obrigatória, validada com Regex (aceita padrão antigo e Mercosul)
-        [Required, RegularExpression(@"^(?:[A-Z]{3}-?\d{4}|[A-Z]{3}\d[A-Z]\d{2})$", 
-            ErrorMessage = "Placa Inválida (use AAA-1234 ou AAA1A23")]
+        // Placa -> obrigatória, validada com Regex (aceita padrão antigo e Mercosul)
+        [Required, RegularExpression(@"^(?:[A-Z]{3}-?\d{4}|[A-Z]{3}\d[A-Z]\d{2})$",
+             ErrorMessage = "Placa Inválida (use AAA-1234 ou AAA1A23")]
         public required string Placa { get; set; }
 
         // Chassi opcional 
@@ -22,6 +23,7 @@ namespace VisionHive.API.Models
         public Prioridade Prioridade { get; set; }
 
         // PatioId obrigatório, liga a moto a um pátio
-        [Required]
-        public Guid PatioId { get; set; }
+        [Required] public Guid PatioId { get; set; }
+    }
+    
 }
