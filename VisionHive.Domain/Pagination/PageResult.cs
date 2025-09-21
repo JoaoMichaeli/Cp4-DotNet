@@ -1,14 +1,17 @@
-﻿namespace VisionHive.Domain.Pagination;
-
-public class PageResult<T>
+﻿namespace VisionHive.Domain.Pagination
 {
-    public IEnumerable<T> Items { get; set; } =  new List<T>();
     
-    public int Total {get; set;}
+    public class PageResult<T>
+    {
+        public IEnumerable<T> Items { get; set; } =  new List<T>();
     
-    public bool HasMore {get; set;}
+        public int Total {get; set;}
     
-    public int Page {get; set;}
+        public bool HasMore {get; set;}
     
-    public int PageSize {get; set;}
+        public int Page {get; set;}
+    
+        public int PageSize {get; set;}
+    }
 }
+
