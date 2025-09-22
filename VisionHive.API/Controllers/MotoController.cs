@@ -1,9 +1,13 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Net;
+using VisionHive.API.Models;
 using VisionHive.Application.DTO.Request;
 using VisionHive.Application.DTO.Response;
+using VisionHive.Domain.Entities;
+using VisionHive.Domain.Pagination;
 using VisionHive.Infrastructure.Contexts;
+using VisionHive.Infrastructure.Repositories;
 
 namespace VisionHive.API.Controllers
 {
@@ -12,138 +16,187 @@ namespace VisionHive.API.Controllers
     [ApiController]
     public class MotoController : ControllerBase
     {
-        private readonly VisionHiveContext _context;
+        private readonly IMotoRepository _motoRepository;
+        private readonly IRepository<Moto> _repository;
 
-        public MotoController(VisionHiveContext context)
+
+        public MotoController(IRepository<Moto> repository, IMotoRepository motoRepository)
         {
-            _context = context;
+            _repository = repository;
+            _motoRepository = motoRepository;
+
         }
 
-        /// <summary>Retorna uma lista de motos</summary>
+        // ====================================
+        // [GET] /moto
+        // Retorna todas as motos cadastradas
+        // ====================================
         [HttpGet]
-        [ProducesResponseType(typeof(IEnumerable<MotoResponse>), (int)HttpStatusCode.OK)]
-        [ProducesResponseType((int)HttpStatusCode.InternalServerError)]
-        [ProducesResponseType((int)HttpStatusCode.ServiceUnavailable)]
-        public async Task<ActionResult<IEnumerable<MotoResponse>>> GetMotos(CancellationToken ct)
+        public async Task<IActionResult> GetAll(CancellationToken ct)
         {
-            // Projeção simples, sem subconsultas
-            var motos = await _context.Motos
-                .Include(m => m.Patio)
-                .AsSplitQuery()
-                .AsNoTracking()
-                .Select(m => new MotoResponse
-                {
-                    Id = m.Id,
-                    Placa = m.Placa,
-                    Chassi = m.Chassi,
-                    NumeroMotor = m.NumeroMotor,
-                    Prioridade = m.Prioridade.ToString(),
-                    Patio = m.Patio.Nome
-                })
-                .ToListAsync(ct);
+            var motos = await _repository.GetAllAsync(ct);
+            return Ok(motos);
+        }
+
+        // ============================
+        // [GET] /moto/{id}
+        // Busca uma moto específica por ID
+        // ============================
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        {
+            var moto = await _repository.GetByIdAsync(id, ct);
+            if (moto == null)
+            {
+                return NotFound("Moto não encontrada");
+            }
+
+            return Ok(moto);
+        }
+
+        // ============================
+        // [GET] /moto/filtro
+        // Filtro simples por prioridade e/ou placa
+        // ============================
+        [HttpGet("filtro")]
+        public async Task<IActionResult> Filtrar(
+            [FromQuery] int? prioridade, // enum prioridade como int
+            [FromQuery] string? placa,
+            CancellationToken ct = default)
+        {
+            var motos = await _repository.GetAllAsync(ct);
+            if (prioridade.HasValue)
+            {
+                motos = motos.Where(m => (int)m.Prioridade == prioridade.Value).ToList();
+            }
+
+            if (!string.IsNullOrWhiteSpace(placa))
+                motos = motos.Where(m => (m.Placa ?? string.Empty)
+                        .Contains(placa, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
             return Ok(motos);
         }
 
-        /// <summary>Retorna uma moto pelo ID</summary>
-        [HttpGet("{id:guid}")]
-        [ProducesResponseType(typeof(MotoResponse), (int)HttpStatusCode.OK)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<ActionResult<MotoResponse>> GetMoto(Guid id, CancellationToken ct)
-        {
-            var moto = await _context.Motos
-                .Include(m => m.Patio)
-                .AsSplitQuery()
-                .AsNoTracking()
-                .Where(m => m.Id == id)
-                .Select(m => new MotoResponse
-                {
-                    Id = m.Id,
-                    Placa = m.Placa,
-                    Chassi = m.Chassi,
-                    NumeroMotor = m.NumeroMotor,
-                    Prioridade = m.Prioridade.ToString(),
-                    Patio = m.Patio.Nome
-                })
-                .FirstOrDefaultAsync(ct);
-
-            if (moto is null) return NotFound();
-            return Ok(moto);
-        }
-
-        /// <summary>Cadastra uma nova moto</summary>
+        // ============================
+        // [POST] /moto
+        // Cria uma nova moto
+        // ============================
         [HttpPost]
-        [ProducesResponseType(typeof(MotoResponse), (int)HttpStatusCode.Created)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<ActionResult<MotoResponse>> PostMoto([FromBody] MotoRequest request, CancellationToken ct)
+        public async Task<IActionResult> Create([FromBody] MotoInputModel input, CancellationToken ct)
         {
-            // 1) valida pátio (sem subconsulta aninhada em projeção)
-            var patio = await _context.Patios
-                .AsNoTracking()
-                .Where(p => p.Id == request.PatioId)
-                .Select(p => new { p.Id, p.Nome })
-                .FirstOrDefaultAsync(ct);
-
-            if (patio is null)
-                return NotFound("Pátio informado não existe.");
-
-            // 2) cria e persiste
-            var moto = new VisionHive.Domain.Entities.Moto(
-                request.Placa, request.Chassi, request.NumeroMotor, request.Prioridade, request.PatioId);
-
-            _context.Motos.Add(moto);
-            await _context.SaveChangesAsync(ct);
-
-            // 3) monta o DTO em memória (evita WHERE FALSE no Oracle)
-            var response = new MotoResponse
+            if (!ModelState.IsValid)
             {
-                Id = moto.Id,
-                Placa = moto.Placa,
-                Chassi = moto.Chassi,
-                NumeroMotor = moto.NumeroMotor,
-                Prioridade = moto.Prioridade.ToString(),
-                Patio = patio.Nome
-            };
+                return BadRequest(ModelState);
+            }
 
-            return CreatedAtAction(nameof(GetMoto), new { id = moto.Id }, response);
+            try
+            {
+                var moto = new Moto(
+                    placa: input.Placa,
+                    chassi: input.Chassi,
+                    numeroMotor: input.NumeroMotor,
+                    prioridade: input.Prioridade,
+                    patioId: input.PatioId
+                );
+
+                await _repository.AddAsync(moto, ct);
+                await _repository.SaveChangesAsync(ct);
+
+                return CreatedAtAction(nameof(GetById), new { id = moto.Id }, moto);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Erro ao cadatrar moto: {ex.Message}");
+            }
         }
-
-        /// <summary>Atualiza uma moto existente</summary>
+        
+        // ============================
+        // [PUT] /moto/{id}
+        // Atualiza os dados de uma moto existente
+        // ============================
         [HttpPut("{id:guid}")]
+        [ProducesResponseType((int)HttpStatusCode.BadRequest)]
         [ProducesResponseType((int)HttpStatusCode.NoContent)]
         [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<IActionResult> PutMoto(Guid id, [FromBody] MotoRequest request, CancellationToken ct)
+        [ProducesResponseType((int)HttpStatusCode.InternalServerError)]
+        public async Task<IActionResult> Update(Guid id, [FromBody] MotoInputModel input, CancellationToken ct)
         {
-            var moto = await _context.Motos.FindAsync(new object?[] { id }, ct);
-            if (moto is null) return NotFound();
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+            
+            var motoExistente = await _repository.GetByIdAsync(id, ct);
+            if (motoExistente == null)
+            {
+                return NotFound("Moto não encontrada");
+            }
 
-            var patioCount = await _context.Patios
-                .AsNoTracking()
-                .Where(p => p.Id == request.PatioId)
-                .CountAsync(ct);
+            try
+            {
+                motoExistente.AtualizarDados(
+                    placa: input.Placa,
+                    chassi: input.Chassi,
+                    numeroMotor: input.NumeroMotor,
+                    prioridade: input.Prioridade,
+                    patioId: input.PatioId
+                );
 
-            if (patioCount == 0)
-                return NotFound("Pátio informado não existe.");
-
-            moto.AtualizarDados(request.Placa, request.Chassi, request.NumeroMotor, request.Prioridade, request.PatioId);
-            await _context.SaveChangesAsync(ct);
-
-            return NoContent();
+                await _repository.UpdateAsync(motoExistente, ct);
+                await _repository.SaveChangesAsync(ct);
+                return NoContent();
+            }
+            catch(Exception ex)
+            {
+                return StatusCode(500, $"Erro ao atualizar moto: {ex.Message}");
+            }
         }
-
-        /// <summary>Remove uma moto existente</summary>
+        
+        // ============================
+        // [DELETE] /moto/{id}
+        // Remove uma moto pelo ID
+        // ============================
         [HttpDelete("{id:guid}")]
-        [ProducesResponseType((int)HttpStatusCode.NoContent)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<IActionResult> DeleteMoto(Guid id, CancellationToken ct)
+        public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
-            var moto = await _context.Motos.FindAsync(new object?[] { id }, ct);
-            if (moto is null) return NotFound();
+            var moto = await _repository.GetByIdAsync(id, ct);
+            if (moto == null)
+            {
+                return NotFound("Moto não encontrada");
+            }
 
-            _context.Motos.Remove(moto);
-            await _context.SaveChangesAsync(ct);
-
-            return NoContent();
+            try
+            {
+                await _repository.DeleteAsync(id, ct);
+                await _repository.SaveChangesAsync(ct);
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Erro ao excluir moto: {ex.Message}");
+            }
+        }
+        
+        // ============================
+        // [GET] /moto/paginado?page=1&pageSize=10
+        // Lista paginada via IMotoRepository
+        // ============================
+        [HttpGet("paginado")]
+        [ProducesResponseType(typeof(PageResult<Moto>), StatusCodes.Status200OK)]
+        public async Task<ActionResult<PageResult<Moto>>> GetPaged(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10,
+            CancellationToken ct = default)
+        {
+            var result = await _motoRepository.GetPaginationAsyncMoto(page, pageSize, ct);
+            return Ok(result);
         }
     }
 }
+        
+
+            
+            
+        
+    
