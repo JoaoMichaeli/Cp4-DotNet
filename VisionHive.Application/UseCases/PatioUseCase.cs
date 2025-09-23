@@ -1,6 +1,7 @@
 ﻿using VisionHive.Application.DTO.Request;
 using VisionHive.Domain.Entities;
 using VisionHive.Infrastructure.Repositories;
+using VisionHive.Domain.Pagination;
 
 namespace VisionHive.Application.UseCases;
 
@@ -11,6 +12,33 @@ public class PatioUseCase : IPatioUseCase
     public PatioUseCase(IRepository<Patio> repository)
     {
         _repository = repository;
+    }
+
+    public async Task<PageResult<Patio>> GetPaginationAsync(PaginatedRequest request, CancellationToken ct)
+    {
+        // normaliza parâmetros
+        var page = request.PageNumber <= 0 ? 1 : request.PageNumber;
+        var size = request.PageSize <= 0 ? 10 : request.PageSize;
+
+        // busca todos e pagina em memória (se tiver IQueryable no repo, dá pra otimizar depois)
+        var all = await _repository.GetAllAsync(ct); // ajuste o nome se seu repo usa outro método
+        var query = all.AsQueryable();
+
+        var total = query.Count();
+        var items = query
+            .Skip((page - 1) * size)
+            .Take(size)
+            .ToList();
+
+        // usar inicializador de objeto (seu PageResult não tem construtor com args)
+        return new PageResult<Patio>
+        {
+            Items = items,
+            Total = total,
+            Page = page,
+            PageSize = size,
+            HasMore = page * size < total
+        };
     }
 
     public async Task<Patio> CreateAsync(

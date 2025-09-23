@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using System.Reflection;
 using VisionHive.Infrastructure.Contexts;
+using Swashbuckle.AspNetCore.Filters;
 namespace VisionHive.API;
 
 public class Program
@@ -34,7 +35,11 @@ public class Program
 
                 // Incluir os coment�rios no Swagger
                 swagger.IncludeXmlComments(xmlPath);
+
+                swagger.ExampleFilters();
             });
+            
+            builder.Services.AddSwaggerExamplesFromAssemblyOf<Program>(); 
 
             // Configura��o do banco de dados
             builder.Services.AddDbContext<VisionHiveContext>(options =>

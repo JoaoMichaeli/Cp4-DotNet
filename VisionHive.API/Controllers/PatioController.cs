@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Net;
 using VisionHive.Application.DTO.Request;
 using VisionHive.Application.DTO.Response;
+using VisionHive.Application.UseCases;
 using VisionHive.Infrastructure.Contexts;
 
 namespace VisionHive.API.Controllers
@@ -12,158 +13,147 @@ namespace VisionHive.API.Controllers
     [ApiController]
     public class PatioController : ControllerBase
     {
-        private readonly VisionHiveContext _context;
+        private readonly IPatioUseCase _patioUseCase;
 
-        public PatioController(VisionHiveContext context)
+        public PatioController(IPatioUseCase patioUseCase)
         {
-            _context = context;
+            _patioUseCase = patioUseCase;
         }
 
-        /// <summary>Lista todos os pátios com sua filial e motos</summary>
+        // ---------- GET /api/patio (paginado) ----------
+        /// <summary>
+        /// Lista paginada de pátios.
+        /// </summary>
         [HttpGet]
-        [ProducesResponseType(typeof(IEnumerable<PatioResponse>), (int)HttpStatusCode.OK)]
-        public async Task<ActionResult<IEnumerable<PatioResponse>>> GetPatios(CancellationToken ct)
+        [ProducesResponseType(typeof(PageResult<PatioDto>), StatusCodes.Status200OK)]
+        public async Task<ActionResult<PageResult<PatioDto>>> GetAll(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10,
+            CancellationToken ct = default)
         {
-            var patios = await _context.Patios
-                .Include(p => p.Filial)
-                .Include(p => p.Motos)
-                .AsSplitQuery()
+            page = page <= 0 ? 1 : page;
+            pageSize = pageSize <= 0 ? 10 : pageSize;
+
+            var query = _context.Patios
                 .AsNoTracking()
-                .OrderBy(p => p.Nome)
-                .Select(p => new PatioResponse
-                {
-                    Id = p.Id,
-                    Nome = p.Nome,
-                    LimiteMotos = p.LimiteMotos,
-                    FilialId = p.FilialId,
-                    Filial = p.Filial.Nome,
-                    Motos = p.Motos
-                        .OrderBy(m => m.Prioridade)
-                        .Select(m => new MotoResponse
-                        {
-                            Id = m.Id,
-                            Placa = m.Placa,
-                            Chassi = m.Chassi,
-                            NumeroMotor = m.NumeroMotor,
-                            Prioridade = m.Prioridade.ToString(),
-                            Patio = p.Nome
-                        })
-                        .ToList()
-                })
+                .OrderBy(p => p.Nome);
+
+            var total = await query.CountAsync(ct);
+
+            var pageEntities = await query
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
                 .ToListAsync(ct);
 
-            return Ok(patios);
+            var items = pageEntities.Select(p => new PatioDto
+            {
+                PatioId = p.PatioId.ToString(),
+                Nome = p.Nome,
+                Endereco = p.Endereco ?? string.Empty,
+                Links = BuildPatioLinks(p.PatioId)
+            }).ToList();
+
+            var result = new PageResult<PatioDto>
+            {
+                Items = items,
+                Total = total,
+                Page = page,
+                PageSize = pageSize,
+                HasMore = page * pageSize < total
+            };
+
+            return Ok(result);
         }
 
-        /// <summary>Busca um pátio por id (com filial e motos)</summary>
-        [HttpGet("{id:guid}")]
-        [ProducesResponseType(typeof(PatioResponse), (int)HttpStatusCode.OK)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<ActionResult<PatioResponse>> GetPatio(Guid id, CancellationToken ct)
+        // ---------- GET /api/patio/{id} ----------
+        /// <summary>
+        /// Busca um pátio pelo Id.
+        /// </summary>
+        [HttpGet("{id}")]
+        [ProducesResponseType(typeof(PatioDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> GetById(Guid id, CancellationToken ct = default)
         {
             var patio = await _context.Patios
-                .Include(p => p.Filial)
-                .Include(p => p.Motos)
-                .AsSplitQuery()
                 .AsNoTracking()
-                .Where(p => p.Id == id)
-                .Select(p => new PatioResponse
-                {
-                    Id = p.Id,
-                    Nome = p.Nome,
-                    LimiteMotos = p.LimiteMotos,
-                    FilialId = p.FilialId,
-                    Filial = p.Filial.Nome,
-                    Motos = p.Motos
-                        .OrderBy(m => m.Prioridade)
-                        .Select(m => new MotoResponse
-                        {
-                            Id = m.Id,
-                            Placa = m.Placa,
-                            Chassi = m.Chassi,
-                            NumeroMotor = m.NumeroMotor,
-                            Prioridade = m.Prioridade.ToString(),
-                            Patio = p.Nome
-                        })
-                        .ToList()
-                })
-                .FirstOrDefaultAsync(ct);
+                .FirstOrDefaultAsync(p => p.PatioId == id, ct);
 
-            if (patio is null) return NotFound();
-            return Ok(patio);
+            if (patio is null) return NotFound("Pátio não encontrado");
+
+            var dto = new PatioDto
+            {
+                PatioId = patio.PatioId.ToString(),
+                Nome = patio.Nome,
+                Endereco = patio.Endereco ?? string.Empty,
+                Links = BuildPatioLinks(patio.PatioId)
+            };
+
+            return Ok(dto);
         }
 
-        /// <summary>Cadastra um novo pátio</summary>
+        // ---------- POST /api/patio ----------
+        /// <summary>
+        /// Cria um novo pátio.
+        /// </summary>
+        // [SwaggerRequestExample(typeof(PatioInputModel), typeof(VisionHive.API.SwaggerExamples.PatioInputExample))]
         [HttpPost]
-        [ProducesResponseType(typeof(PatioResponse), (int)HttpStatusCode.Created)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<ActionResult<PatioResponse>> PostPatio([FromBody] PatioRequest request, CancellationToken ct)
+        [ProducesResponseType(typeof(PatioDto), StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> Create([FromBody] PatioInputModel input, CancellationToken ct = default)
         {
-            // 1) valida filial (sem subconsulta aninhada)
-            var filial = await _context.Filiais
-                .AsNoTracking()
-                .Where(f => f.Id == request.FilialId)
-                .Select(f => new { f.Id, f.Nome })
-                .FirstOrDefaultAsync(ct);
+            if (!ModelState.IsValid) return BadRequest(ModelState);
 
-            if (filial is null)
-                return NotFound("Filial não encontrada.");
+            var patio = new Patio
+            {
+                PatioId = Guid.NewGuid(),
+                Nome = input.Nome,
+                Endereco = input.Endereco
+            };
 
-            // 2) cria e persiste
-            var patio = new VisionHive.Domain.Entities.Patio(request.Nome, request.LimiteMotos, request.FilialId);
             _context.Patios.Add(patio);
             await _context.SaveChangesAsync(ct);
 
-            // 3) carrega coleções via ChangeTracker e monta DTO em memória (evita WHERE FALSE no Oracle)
-            await _context.Entry(patio).Collection(p => p.Motos).LoadAsync(ct);
-
-            var response = new PatioResponse
+            var dto = new PatioDto
             {
-                Id = patio.Id,
+                PatioId = patio.PatioId.ToString(),
                 Nome = patio.Nome,
-                LimiteMotos = patio.LimiteMotos,
-                FilialId = filial.Id,
-                Filial  = filial.Nome,
-                Motos = patio.Motos
-                    .OrderBy(m => m.Prioridade)
-                    .Select(m => new MotoResponse
-                    {
-                        Id = m.Id,
-                        Placa = m.Placa,
-                        Chassi = m.Chassi,
-                        NumeroMotor = m.NumeroMotor,
-                        Prioridade = m.Prioridade.ToString(),
-                        Patio = patio.Nome
-                    })
-                    .ToList()
+                Endereco = patio.Endereco ?? string.Empty,
+                Links = BuildPatioLinks(patio.PatioId)
             };
 
-            return CreatedAtAction(nameof(GetPatio), new { id = response.Id }, response);
+            return CreatedAtAction(nameof(GetById), new { id = patio.PatioId }, dto);
         }
 
-        /// <summary>Atualiza os dados de um pátio</summary>
-        [HttpPut("{id:guid}")]
-        [ProducesResponseType((int)HttpStatusCode.NoContent)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<IActionResult> PutPatio(Guid id, [FromBody] PatioRequest request, CancellationToken ct)
+        // ---------- PUT /api/patio/{id} ----------
+        /// <summary>
+        /// Atualiza um pátio existente.
+        /// </summary>
+        [HttpPut("{id}")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> Update(Guid id, [FromBody] PatioInputModel input, CancellationToken ct = default)
         {
-            var patio = await _context.Patios.FindAsync(new object?[] { id }, ct);
-            if (patio is null) return NotFound();
+            var patio = await _context.Patios.FirstOrDefaultAsync(p => p.PatioId == id, ct);
+            if (patio is null) return NotFound("Pátio não encontrado");
 
-            patio.AtualizarDados(request.Nome, request.LimiteMotos);
+            patio.Nome = input.Nome;
+            patio.Endereco = input.Endereco;
+
             await _context.SaveChangesAsync(ct);
-
             return NoContent();
         }
 
-        /// <summary>Remove um pátio</summary>
-        [HttpDelete("{id:guid}")]
-        [ProducesResponseType((int)HttpStatusCode.NoContent)]
-        [ProducesResponseType((int)HttpStatusCode.NotFound)]
-        public async Task<IActionResult> DeletePatio(Guid id, CancellationToken ct)
+        // ---------- DELETE /api/patio/{id} ----------
+        /// <summary>
+        /// Remove um pátio pelo Id.
+        /// </summary>
+        [HttpDelete("{id}")]
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken ct = default)
         {
-            var patio = await _context.Patios.FindAsync(new object?[] { id }, ct);
-            if (patio is null) return NotFound();
+            var patio = await _context.Patios.FirstOrDefaultAsync(p => p.PatioId == id, ct);
+            if (patio is null) return NotFound("Pátio não encontrado");
 
             _context.Patios.Remove(patio);
             await _context.SaveChangesAsync(ct);
